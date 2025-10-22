@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hexanoid — Редактор уровней</title>
+  <style>
+    html,body{margin:0;height:100%;background:#0b0b0b;color:#ddd;font-family:sans-serif}
+    .container{display:flex;flex-direction:column;height:100%}
+    canvas{background:#111;display:block;width:100%;height:360px;cursor:pointer}
+    .controls{flex:1;padding:16px;display:flex;flex-wrap:wrap;gap:16px;overflow:auto}
+    .panel{background:#1a1a1a;padding:12px;border-radius:8px;box-shadow:0 0 12px #000}
+    .row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+    .value{min-width:60px;text-align:center;padding:6px 10px;background:#222;border-radius:6px}
+    button{padding:6px 10px;background:#333;border:none;border-radius:6px;color:#ddd;cursor:pointer}
+    input[type=range]{width:100%}
+    textarea{width:100%;height:80px;background:#111;color:#ccc;border:1px solid #333;padding:8px;border-radius:6px}
+    .note{font-size:12px;color:#aaa}
+    .filename{width:100%;padding:6px;background:#222;border:1px solid #333;border-radius:6px;color:#ddd;margin-bottom:8px}
+  </style>
+</head>
+<body>
+<div class="container">
+  <canvas id="preview"></canvas>
+  <div class="controls">
+    <div class="panel">
+      <div style="font-weight:bold;margin-bottom:8px">Настройки сетки</div>
+      <div class="row">
+        <label>Горизонталь (cellWidth)</label>
+        <button id="cwDec">−</button>
+        <div class="value" id="cwVal">60</div>
+        <button id="cwInc">+</button>
+      </div>
+      <input type="range" id="cwRange" min="30" max="160" value="60" />
+      <div class="row">
+        <label>Вертикаль (rowStep)</label>
+        <button id="rsDec">−</button>
+        <div class="value" id="rsVal">52</div>
+        <button id="rsInc">+</button>
+      </div>
+      <input type="range" id="rsRange" min="30" max="160" value="52" />
+      <div class="row">
+        <label><input type="checkbox" id="removeLast"> Убрать последний в чётных рядах</label>
+      </div>
+      <div class="row">
+        <button id="resetBtn">Сбросить все кирпичи</button>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:1">
+      <div style="font-weight:bold;margin-bottom:8px">Экспорт уровня</div>
+      <input type="text" id="filename" class="filename" placeholder="level1.json" value="level1.json">
+      <textarea id="exportArea" readonly></textarea>
+      <div class="row">
+        <button id="copyBtn">Скопировать JSON</button>
+        <button id="downloadBtn">Скачать файл</button>
+        <button id="logBtn">В консоль</button>
+      </div>
+      <div class="note">Кликните на кирпичик, чтобы удалить его. Сбросьте, чтобы восстановить все.</div>
+      <div class="note" id="brickCount">Кирпичей: 0</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('preview');
+  const ctx = canvas.getContext('2d');
+  const cwVal = document.getElementById('cwVal');
+  const rsVal = document.getElementById('rsVal');
+  const cwRange = document.getElementById('cwRange');
+  const rsRange = document.getElementById('rsRange');
+  const removeLast = document.getElementById('removeLast');
+  const resetBtn = document.getElementById('resetBtn');
+  const exportArea = document.getElementById('exportArea');
+  const filename = document.getElementById('filename');
+  const copyBtn = document.getElementById('copyBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const logBtn = document.getElementById('logBtn');
+  const brickCount = document.getElementById('brickCount');
+
+  let cellWidth = 60;
+  let rowStep = 52;
+  const hexRadius = 20;
+  let bricks = [];
+  let removedBricks = new Set(); // Хранит ID удаленных кирпичей
+
+  // Генерирует уникальный ID для кирпича
+  function generateBrickId(x, y) {
+    return `${x},${y}`;
+  }
+
+  // Создает начальную сетку кирпичей
+  function createBricks() {
+    const cols = Math.floor(canvas.width / cellWidth);
+    const rows = Math.floor(canvas.height / rowStep);
+    const shift = cellWidth / 2;
+    const newBricks = [];
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (removeLast.checked && r % 2 === 1 && c === cols - 1) continue;
+        let x = c * cellWidth + cellWidth / 2;
+        if (r % 2 === 1) x += shift;
+        const y = r * rowStep + hexRadius + 4;
+        
+        const brickId = generateBrickId(x, y);
+        newBricks.push({ x, y, id: brickId });
+      }
+    }
+    
+    return newBricks;
+  }
+
+  // Рисует сцену
+  function draw() {
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Пересоздаем кирпичи, если нужно
+    if (bricks.length === 0) {
+      bricks = createBricks();
+      removedBricks.clear();
+    }
+    
+    // Рисуем только неудаленные кирпичи
+    for (const brick of bricks) {
+      if (!removedBricks.has(brick.id)) {
+        drawHex(brick.x, brick.y, hexRadius);
+      }
+    }
+    
+    updateExport();
+    updateBrickCount();
+  }
+
+  // Рисует шестигранник
+  function drawHex(x, y, r) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 3 * i;
+      const px = r * Math.cos(a);
+      const py = r * Math.sin(a);
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#4cc9c6';
+    ctx.fill();
+    ctx.strokeStyle = '#222';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Проверяет, попал ли клик в кирпич
+  function getBrickAt(x, y) {
+    for (const brick of bricks) {
+      if (removedBricks.has(brick.id)) continue;
+      
+      const distance = Math.sqrt((x - brick.x) ** 2 + (y - brick.y) ** 2);
+      if (distance <= hexRadius) {
+        return brick;
+      }
+    }
+    return null;
+  }
+
+  // Обработчик клика по канвасу
+  canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    const brick = getBrickAt(x, y);
+    if (brick) {
+      removedBricks.add(brick.id);
+      draw();
+    }
+  });
+
+  // Обновляет JSON для экспорта
+  function updateExport() {
+    const activeBricks = bricks.filter(brick => !removedBricks.has(brick.id));
+    const obj = {
+      hexRadius,
+      cellWidth,
+      rowStep,
+      evenRowShift: +(cellWidth / 2).toFixed(2),
+      removeLastStagger: !!removeLast.checked,
+      centers: activeBricks.map(b => ({ x: Math.round(b.x), y: Math.round(b.y) }))
+    };
+    exportArea.value = JSON.stringify(obj, null, 2);
+  }
+
+  // Обновляет счетчик кирпичей
+  function updateBrickCount() {
+    const activeCount = bricks.filter(brick => !removedBricks.has(brick.id)).length;
+    brickCount.textContent = `Кирпичей: ${activeCount}`;
+  }
+
+  // Обновляет UI
+  function updateUI() {
+    cwVal.textContent = cellWidth;
+    rsVal.textContent = rowStep;
+    cwRange.value = cellWidth;
+    rsRange.value = rowStep;
+    
+    // При изменении параметров сетки пересоздаем кирпичи
+    bricks = createBricks();
+    removedBricks.clear();
+    draw();
+  }
+
+  // Сбрасывает все кирпичи
+  resetBtn.addEventListener('click', () => {
+    removedBricks.clear();
+    draw();
+  });
+
+  // Обработчики элементов управления
+  cwRange.addEventListener('input', e => { cellWidth = +e.target.value; updateUI(); });
+  rsRange.addEventListener('input', e => { rowStep = +e.target.value; updateUI(); });
+  document.getElementById('cwInc').onclick = () => { cellWidth += 2; updateUI(); };
+  document.getElementById('cwDec').onclick = () => { cellWidth -= 2; updateUI(); };
+  document.getElementById('rsInc').onclick = () => { rowStep += 2; updateUI(); };
+  document.getElementById('rsDec').onclick = () => { rowStep -= 2; updateUI(); };
+  removeLast.addEventListener('change', updateUI);
+
+  // Копирование в буфер обмена
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(exportArea.value);
+      copyBtn.textContent = 'Скопировано';
+      setTimeout(() => copyBtn.textContent = 'Скопировать JSON', 1000);
+    } catch (e) {
+      exportArea.select();
+    }
+  };
+
+  // Скачивание файла
+  downloadBtn.onclick = () => {
+    const blob = new Blob([exportArea.value], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename.value || 'level.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Вывод в консоль
+  logBtn.onclick = () => {
+    console.log(JSON.parse(exportArea.value));
+    logBtn.textContent = 'В консоли';
+    setTimeout(() => logBtn.textContent = 'В консоль', 1000);
+  };
+
+  window.addEventListener('resize', draw);
+  updateUI();
+})();
+</script>
+</body>
+</html>

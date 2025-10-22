@@ -130,7 +130,7 @@
   }
 
   // Load level
-  async function loadLevel(path = 'levels/level1.json'){
+  async function loadLevel(path = 'Levels/level1.json'){
     try {
       statusEl.textContent = 'Загрузка уровня...';
       levelComplete = false;
@@ -468,7 +468,7 @@
 
   // Init: resize, load level, start loop
   resizeCanvas();
-  await loadLevel('levels/level1.json');
+  await loadLevel('Levels/level1.json');
   lastTime = performance.now();
   running = true;
   requestAnimationFrame(loop);

@@ -27,12 +27,7 @@
     <div class="level-select">
       <label for="levelSelect">Уровень:</label>
       <select id="levelSelect">
-        <option value="Levels/level1.json">Уровень 1</option>
-        <option value="Levels/level2.json">Уровень 2</option>
-        <option value="Levels/level3.json">Уровень 3</option>
-        <option value="Levels/level4.json">Уровень 4</option>
-        <option value="Levels/level5.json">Уровень 5</option>
-        <option value="Levels/custom.json">Пользовательский</option>
+        <option value="" disabled selected>Загрузка уровней...</option>
       </select>
       <span id="levelCompletion"></span>
     </div>
@@ -70,19 +65,40 @@
   const TRAIL_MAX = 18;
   let running = true;
   let muted = false;
-  let currentLevel = 'Levels/level1.json';
+  let currentLevel = null;
   let completedLevels = new Set();
   let levelComplete = false;
-
-  // Available levels
-  const levels = [
-    'Levels/level1.json',
-    'Levels/level2.json', 
-    'Levels/level3.json',
-    'Levels/level4.json',
-    'Levels/level5.json',
-    'Levels/custom.json'
+  let fileAccessWarningShown = false;
+  
+  // Level catalog: extend this list to add new levels
+  const levelConfigs = [
+    { value: 'Levels/level1.json', label: 'Уровень 1' },
+    { value: 'Levels/level2.json', label: 'Уровень 2' },
+    { value: 'Levels/level3.json', label: 'Уровень 3' },
+    { value: 'Levels/level4.json', label: 'Уровень 4' },
+    { value: 'Levels/level5.json', label: 'Уровень 5' },
+    { value: 'Levels/level6.json', label: 'Уровень 6' },
+    { value: 'Levels/custom.json', label: 'Пользовательский', excludeFromCycle: true }
   ];
+  const levelMetaMap = new Map(levelConfigs.map(cfg => [cfg.value, cfg]));
+  const cycleLevels = levelConfigs
+    .filter(cfg => !cfg.excludeFromCycle)
+    .map(cfg => cfg.value);
+  currentLevel = cycleLevels[0] || levelConfigs[0]?.value || 'Levels/level1.json';
+
+  function populateLevelSelect(){
+    levelSelect.innerHTML = '';
+    levelConfigs.forEach(cfg => {
+      const option = document.createElement('option');
+      option.value = cfg.value;
+      option.textContent = cfg.label;
+      levelSelect.appendChild(option);
+    });
+    if (currentLevel) {
+      levelSelect.value = currentLevel;
+    }
+  }
+  populateLevelSelect();
 
   // Resize canvas to frame
   function resizeCanvas() {
@@ -134,7 +150,7 @@
   }
 
   // Load level
-  async function loadLevel(path = 'Levels/level1.json'){
+  async function loadLevel(path = currentLevel || cycleLevels[0] || 'Levels/level1.json'){
     try {
       statusEl.textContent = 'Загрузка уровня...';
       levelComplete = false;
@@ -157,18 +173,35 @@
       }));
       
       currentLevel = path;
-      titleEl.textContent = `Hexanoid — ${path.split('/').pop()}`;
+      const meta = levelMetaMap.get(path);
+      const levelLabel = meta ? meta.label : path.split('/').pop();
+      titleEl.textContent = `Hexanoid — ${levelLabel}`;
       statusEl.textContent = `Загружено: ${hexBricks.length} кирпичей`;
       resetBall();
       
       // Update level select
       levelSelect.value = path;
+      if (levelSelect.value !== path) {
+        const option = document.createElement('option');
+        option.value = path;
+        option.textContent = levelLabel;
+        levelSelect.appendChild(option);
+        levelSelect.value = path;
+      }
       updateLevelCompletion();
       
       return true;
     } catch (err) {
       console.error('Level load error', err);
-      statusEl.textContent = 'Ошибка загрузки уровня';
+      const isFileOrigin = window.location.protocol === 'file:';
+      const hint = isFileOrigin
+        ? 'Браузер блокирует чтение JSON напрямую. Запустите игру через локальный сервер (например, "npx serve" или "python -m http.server").'
+        : 'Проверьте, что файл уровня существует и доступен.';
+      statusEl.textContent = `Ошибка загрузки уровня. ${hint}`;
+      if (isFileOrigin && !fileAccessWarningShown) {
+        fileAccessWarningShown = true;
+        alert('Браузер не разрешает fetch() файлов при открытии HTML напрямую. Запустите в папке "Hexanoid" локальный сервер, например:\n\npython -m http.server 8000\n\nЗатем откройте http://localhost:8000/hexanoid.html');
+      }
       hexBricks = [];
       return false;
     }
@@ -185,17 +218,23 @@
     }
   }
 
+  function remainingBrickCount(){
+    return hexBricks.filter(b => !b.hit).length;
+  }
+
   // Check if level is complete
   function checkLevelCompletion() {
-    const remainingBricks = hexBricks.filter(b => !b.hit).length;
-    return remainingBricks === 0;
+    if (!hexBricks.length) return false;
+    return remainingBrickCount() === 0;
   }
 
   // Load next level
   function loadNextLevel() {
-    const currentIndex = levels.indexOf(currentLevel);
-    const nextIndex = (currentIndex + 1) % levels.length;
-    loadLevel(levels[nextIndex]);
+    const pool = cycleLevels.length ? cycleLevels : levelConfigs.map(cfg => cfg.value);
+    if (!pool.length) return;
+    const currentIndex = pool.indexOf(currentLevel);
+    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % pool.length;
+    loadLevel(pool[nextIndex]);
   }
 
   // Normalize centers to canvas
@@ -302,7 +341,7 @@
     // HUD
     ctx.fillStyle = '#ddd';
     ctx.font = '12px system-ui, Arial';
-    ctx.fillText(`Кирпичей: ${hexBricks.filter(b => !b.hit).length}`, 10, canvas.height - 10);
+    ctx.fillText(`Кирпичей: ${remainingBrickCount()}`, 10, canvas.height - 10);
     
     if (levelComplete) {
       ctx.fillStyle = '#4cc98a';
@@ -428,11 +467,16 @@
   }, { passive: true });
 
   // Buttons
-  restartBtn.addEventListener('click', () => { 
+  restartBtn.addEventListener('click', async () => { 
+    const noBricksLeft = !hexBricks.length || remainingBrickCount() === 0;
+    if (levelComplete || noBricksLeft) {
+      await loadLevel(currentLevel);
+      return;
+    }
     resetBall(); 
     levelComplete = false;
     nextLevelBtn.style.display = 'none';
-    statusEl.textContent = `Загружено: ${hexBricks.length} кирпичей`;
+    statusEl.textContent = `Продолжаем: осталось ${remainingBrickCount()} кирпичей`;
   });
   
   muteBtn.addEventListener('click', () => { 
@@ -445,7 +489,8 @@
   });
   
   levelSelect.addEventListener('change', (e) => {
-    loadLevel(e.target.value);
+    const selectedLevel = e.target.value;
+    if (selectedLevel) loadLevel(selectedLevel);
   });
 
   // Game loop
@@ -472,7 +517,7 @@
 
   // Init: resize, load level, start loop
   resizeCanvas();
-  await loadLevel('Levels/level1.json');
+  await loadLevel(currentLevel);
   lastTime = performance.now();
   running = true;
   requestAnimationFrame(loop);
